@@ -1,0 +1,346 @@
+#!/bin/bash
+# $Id: createT3X,v 1.4 2006/11/16 20:54:04 dkd-otto Exp $
+# A script to convert SVN checkouts into T3X files.
+#
+# Author:		Andreas Otto <andreas.otto@dkd.de>
+# Copyright:	(C) 2006 by Andreas Otto
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+# Enable debug mode
+# set -x
+
+# Enable profiling
+profiling=`which time`
+
+# Defining variables we need
+#
+#
+
+# Record the number of parameters
+PARAMETERS=${#}
+PARAMETERS_NEEDED=1
+
+
+
+
+# Get the current date, the current year and the previous month
+THIS_DATE=`date +"%Y%m%d%H%M%S"`
+
+
+
+
+# These variables define the program name and version number
+PROGRAM_NAME_SHORT="EXPNIGHT"
+PROGRAM_NAME_LONG="Export nightly builds from SVN repository"
+PROGRAM_VERSION="1.0"
+
+
+
+# This variable defines the protocol for the connection to the SVN repository
+SVN_PROTOCOL="http://"
+
+# Define user and group
+USER="wwwrun"
+GROUP="www"
+
+
+# Load configuration file or use default configuration
+if [ -f ${1} ]
+then
+	source ${1}
+else
+	# This variable defines where the local export folder is located
+	PATH_SVN_EXPORT="${1}"
+
+	# This variable defines where the T3X export folder is located
+	PATH_T3X_EXPORT="${2}"
+
+	# This variable defines where the local SVN repository is located
+	PATH_SVN_REPOSITORIES="${3}"
+
+	# This variable defines the project name
+	PROJECT_NAME="${4}"
+
+	# The SVN user
+	SVN_USER="${5}"
+
+	# The SVN user's password
+	SVN_PASSWD="${6}"
+fi
+
+
+# Clear the terminal screen
+# clear
+
+
+
+
+# BEGIN programName
+programName() {
+	echo "${PROGRAM_NAME_LONG} ${PROGRAM_VERSION}"
+	echo "Author:		Andreas Otto <andreas.otto@dkd.de>"
+	echo "Copyright:	(C) 2006 by Andreas Otto"
+	echo ""
+	echo "This program is free software; you can redistribute it and/or modify"
+	echo "it under the terms of the GNU General Public License as published by"
+	echo "the Free Software Foundation; either version 2 of the License, or"
+	echo "(at your option) any later version."
+	echo ""
+}
+# END programName
+
+
+
+
+# BEGIN programUsage
+programUsage() {
+	if [ ${PARAMETERS} -lt ${PARAMETERS_NEEDED} ]
+	then
+		echo "[${PROGRAM_NAME_LONG}] expects ${PARAMETERS_NEEDED} parameters."
+		echo "PATH_SVN_EXPORT = The path to the export folder."
+		echo "PATH_T3X_EXPORT = The path to the T3X export folder."
+		echo "PATH_SVN_REPOSITORIES = The path to the SVN repository."
+		echo "PROJECT_NAME = The name of the project."
+		echo "[Optional] SVN_USER = The username used to connect to the SVN repository."
+		echo "[Optional] SVN_PASSWD = The password for the SVN user."
+		echo ""
+		echo "It is also possible to provide a configuration file as first and onyl parameter."
+		exit
+	fi
+}
+# END programUsage
+
+
+
+
+# BEGIN rootCheck
+rootCheck() {
+	# Check that we are root
+	local YOU=`whoami`
+	if [ ${UID} != 0 ]
+	then
+		echo "You need to be [root] but you are [${YOU}]."
+		echo "Going back to sleep now..."
+		exit
+	fi
+}
+# END rootCheck
+
+
+
+
+# BEGIN programCheck
+programCheck() {
+	local THIS_CHECK="0"
+
+	echo "Checking variables and programs now."
+
+	# Check that bzip2 is installed
+	local THIS_BZIP=`which bzip2`
+
+	if [ -z ${THIS_BZIP} ]
+	then
+		echo "You need to install [bzip2]. Aborting."
+		local THIS_CHECK="1"
+	fi
+
+	# Check that trac-admin is installed
+	THIS_TRAC_ADMIN=`which trac-admin`
+	if [ -z ${THIS_TRAC_ADMIN} ]
+	then
+		echo "You need to install [trac-admin]. Aborting."
+		local THIS_CHECK="1"
+	fi
+
+	# Check that svn is installed
+	THIS_SVN=`which svn`
+	if [ -z ${THIS_SVN} ]
+	then
+		echo "You need to install [svn]. Aborting."
+		local THIS_CHECK="1"
+	fi
+
+	if [ -z ${PATH_SVN_EXPORT} ]
+	then
+		echo "PATH_SVN_PROJECTS cannot be empty."
+		local THIS_CHECK="1"
+	fi
+
+	if [ ! -d ${PATH_SVN_EXPORT} ]
+	then
+		echo "The directory [${PATH_SVN_EXPORT}] does not exist."
+		local THIS_CHECK="1"
+	fi
+
+	if [ ! -d "${PATH_SVN_EXPORT}/T3X" ]
+	then
+		echo "The directory [${PATH_SVN_EXPORT}/T3X] does not exist."
+		mkdir ${PATH_SVN_EXPORT}/T3X
+		echo "Created directory ${PATH_SVN_EXPORT}/T3X"
+	fi
+
+	if [ -z ${PATH_T3X_EXPORT} ]
+	then
+		echo "PATH_T3X_EXPORT cannot be empty."
+		local THIS_CHECK="1"
+	fi
+
+	if [ ! -d "${PATH_T3X_EXPORT}" ]
+	then
+		echo "The directory [${PATH_SVN_EXPORT}] does not exist."
+		mkdir ${PATH_SVN_EXPORT}
+		echo "Created directory ${PATH_SVN_EXPORT}"
+	fi
+
+	if [ -z ${PATH_SVN_REPOSITORIES} ]
+	then
+		echo "PATH_SVN_REPOSITORIES cannot be empty."
+		local THIS_CHECK="1"
+	fi
+
+	if [ -z ${SVN_USER} ]
+	then
+		SVN_USERNAME=""
+	else
+		SVN_USERNAME=" --username ${SVN_USER}"
+	fi
+
+	if [ -z ${SVN_PASSWD} ]
+	then
+		SVN_USERPASSWD=""
+	else
+		SVN_USERPASSWD=" --password ${SVN_PASSWD}"
+	fi
+
+	if [ ${THIS_CHECK} -eq 1 ]
+	then
+		echo "Aborting."
+		exit
+	fi
+}
+# END programCheck
+
+
+
+
+# BEGIN cleanCheckoutFolder
+function cleanCheckoutFolder() {
+	echo "Cleaning ${PATH_SVN_EXPORT} now..."
+	for i in `ls ${PATH_SVN_EXPORT}`
+	do
+		j=`basename $i`
+		rm -rf ${PATH_SVN_EXPORT}/${j}
+	done
+}
+# END cleanCheckoutFolder
+
+
+
+
+# BEGIN exportModules
+function exportModules() {
+	echo "Exporting modules to ${PATH_SVN_EXPORT} now..."
+	for i in `svn${SVN_USERNAME}${SVN_USERPASSWD} list ${SVN_PROTOCOL}${PATH_SVN_REPOSITORIES}/${PROJECT_NAME}`
+	do
+		j=`basename $i`
+		if [ ${j:0:3} == "tx_" ]
+		then
+			echo "Exported: ${j}"
+			svn${SVN_USERNAME}${SVN_USERPASSWD} -q --force export ${SVN_PROTOCOL}${PATH_SVN_REPOSITORIES}/${PROJECT_NAME}/${j}/trunk ${PATH_SVN_EXPORT}/${j}
+		fi
+	done
+}
+# END exportModules
+
+
+
+
+# BEGIN createT3XModules
+function createT3XModules() {
+	for i in `ls ${PATH_SVN_EXPORT}`
+	do
+		if [ ${i} != "T3X" ]
+		then
+			j=`basename $i`
+			NEW_FOLDER=`grep "# Extension Manager/Repository config file for ext: " ${PATH_SVN_EXPORT}/${j}/ext_emconf.php | awk -F "'|\"" '{print $2}'`
+			if [ ! -z ${NEW_FOLDER} ]
+			then
+				mv ${PATH_SVN_EXPORT}/${j} ${PATH_SVN_EXPORT}/${NEW_FOLDER}
+				echo "Renamed ${j} to ${NEW_FOLDER}"
+				createPackage
+			else
+				rm -rf ${PATH_SVN_EXPORT}/${j}
+				echo "Removed ${j}"
+			fi
+		fi
+	done
+}
+# END createT3XModules
+
+
+
+
+# BEGIN createPackage
+function createPackage() {
+	echo "Create package for ${NEW_FOLDER}"
+	DIRNAME=`dirname ${0}`
+	/usr/bin/php -q -d error_reporting=5 -d memory_limit=64M ${DIRNAME}/createT3X.php ${PATH_SVN_EXPORT} ${NEW_FOLDER}
+}
+# END createPackage
+
+
+
+
+# BEGIN changeOwner
+function changeOwner() {
+	for i in `ls ${PATH_SVN_EXPORT}`
+	do
+		chown -R ${USER}:${GROUP} ${PATH_SVN_EXPORT}/${i}
+	done
+}
+# END changeOwner
+
+
+
+
+# BEGIN copyExports
+function copyExports() {
+	echo "Copy T3X packages from [${PATH_SVN_EXPORT}/T3X/] to [${PATH_T3X_EXPORT}]..."
+	rm ${PATH_T3X_EXPORT}/*.t3x
+	cp ${PATH_SVN_EXPORT}/T3X/*.t3x ${PATH_T3X_EXPORT}
+}
+# END copyExports
+
+
+
+
+# BEGIN programEnd
+programEnd() {
+	echo "Finished the job, going back to sleep now."
+	exit
+}
+# END programEnd
+
+
+
+# Execute the functions defined above.
+rootCheck
+
+# Functions below this line are mandatory and should not be deactivated.
+programName
+programUsage
+programCheck
+
+cleanCheckoutFolder
+# Run programCheck a second time to re-create the T3X folder
+programCheck
+exportModules
+createT3XModules
+changeOwner
+copyExports
+
+programEnd
